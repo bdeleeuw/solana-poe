@@ -1,0 +1,139 @@
+# solana-poe
+
+Hash every file in a directory and anchor those hashes on Solana as a
+timestamped proof-of-existence, using the SPL Memo program. No custom
+on-chain program is required — each memo transaction is itself the proof,
+and Solana's block time gives you a trustless timestamp.
+
+## Install
+
+```bash
+cd solana-poe
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+## Usage
+
+Hash a directory locally (no blockchain interaction):
+
+```bash
+solana-poe hash ./my-files
+```
+
+Post each file's hash to devnet as a Memo transaction, one transaction per
+file, and record the results in a manifest:
+
+```bash
+solana-poe submit ./my-files \
+  --keypair ~/.config/solana/id.json \
+  --cluster devnet \
+  --manifest manifest.json
+```
+
+Pack multiple file hashes into as few memo transactions as possible
+(cheaper, at the cost of one transaction covering several files):
+
+```bash
+solana-poe submit ./my-files --keypair ~/.config/solana/id.json --combine
+```
+
+Preview the memos that would be sent without spending anything or touching
+the network:
+
+```bash
+solana-poe submit ./my-files --keypair ~/.config/solana/id.json --dry-run
+```
+
+Verify a manifest later — re-fetches each transaction from the chain,
+checks its memo contains the recorded hash, and optionally recomputes local
+file hashes to confirm the files haven't changed:
+
+```bash
+solana-poe verify manifest.json --check-files
+```
+
+`verify` exits non-zero if any entry fails.
+
+## Hash salting
+
+Each file's digest is salted with that file's full, resolved, absolute
+filesystem path:
+
+```
+digest = sha256(full_path.encode("utf-8") + b"\x00" + file_bytes)
+```
+
+So `solana-poe hash ./my-files` salts each digest with something like
+`/home/alice/project/my-files/docs/report.pdf`, not just the file's
+content or a path relative to anything. This means:
+
+- Two files with identical bytes at different locations get different
+  digests.
+- Moving or renaming a file (even without touching its content) changes
+  its digest, since the digest also binds the file's exact location.
+- `verify --check-files` re-hashes each file directly from the full path
+  recorded in the manifest, so the file must still exist at that same
+  absolute path (typically: the same machine, unmoved) for the check to
+  run; otherwise it reports MISSING.
+
+## Memo format
+
+Each memo is one or more lines of `algorithm:hexdigest:full/path`,
+optionally preceded by a `--memo-prefix` tag line (default
+`solana-poe:v1`), where `full/path` is the same absolute path used as
+the hash salt above. This keeps the on-chain data self-describing and
+independently auditable in any Solana explorer, without needing this
+tool.
+
+## Manifest format
+
+`submit` writes a JSON array of entries:
+
+```json
+{
+  "full_path": "/home/alice/project/my-files/docs/report.pdf",
+  "algorithm": "sha256",
+  "hash": "...",
+  "size": 12345,
+  "signature": "...",
+  "slot": 123456789,
+  "block_time": 1700000000,
+  "cluster": "devnet",
+  "rpc_url": "https://api.devnet.solana.com"
+}
+```
+
+Keep this file — it's what lets you or anyone else later prove the file
+existed (with that hash, at that exact path) at that block time.
+
+## Library
+
+The CLI is a thin wrapper over `solana_poe`:
+
+```python
+from pathlib import Path
+from solana_poe import hash_directory, load_keypair, SolanaPoEClient
+
+results = hash_directory(Path("./my-files"))
+client = SolanaPoEClient(
+    rpc_url="https://api.devnet.solana.com",
+    keypair=load_keypair(Path("~/.config/solana/id.json")),
+)
+for r in results:
+    # r.digest is already salted with r.full_path (the file's resolved,
+    # absolute path); hash_file(path) alone, with no salt argument,
+    # gives the unsalted content hash if you need that too.
+    receipt = client.send_memo(f"sha256:{r.digest}:{r.full_path}")
+    print(r.full_path, receipt.signature)
+```
+
+## Notes
+
+- Fee payer needs SOL in the target cluster (use `solana airdrop` on
+  devnet/testnet).
+- A transaction's memo is limited to a few hundred bytes; `--combine` packs
+  as many file entries per transaction as fit under that limit rather than
+  failing.
+- `--cluster` defaults to `devnet`. Use `--cluster mainnet-beta` (real SOL)
+  or `--rpc-url` for a custom/private endpoint.

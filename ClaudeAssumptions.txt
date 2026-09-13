@@ -1,0 +1,259 @@
+ClaudeAssumptions.txt
+solana-poe project — log of assumptions made by Claude
+
+This file tracks assumptions made while building this project, since the
+original request ("create a python library with wrapper cli to take a
+directory of files, hash each of them, and post the hash values to the
+solana blockchain using Memo as a proof-of-existence") left many design
+and implementation details unspecified. Entries are grouped by whether
+they were later corrected during development, or still stand as design
+defaults the user has not explicitly confirmed.
+
+================================================================
+ASSUMPTIONS THAT WERE WRONG AND CORRECTED DURING DEVELOPMENT
+================================================================
+
+1. Memo program v2 address.
+   Initially wrote the SPL Memo v2 program id from memory as
+   "MemoSq4gqABAXKb96qnH8TysNKBEcgnyUx23YkzB". This was WRONG. Verified
+   the correct id by installing solana-py and inspecting the actual
+   spl.memo.constants module, then cross-checked against the upstream
+   solana-program/memo GitHub repo:
+     v2 (current): MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr
+     v1 (legacy):  Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo (confirmed
+                   via docs.rs source for the spl-memo 1.0.0 Rust crate's
+                   declare_id! macro)
+   Lesson: do not trust a memorized on-chain program id without checking
+   it against an installed package or upstream source.
+
+2. solana-py has a synchronous client.
+   Assumed `solana.rpc.api.Client` and `solana.transaction.Transaction`
+   (the "legacy" synchronous API) were available, matching older
+   solana-py docs/examples. The pinned dependency range (solana>=0.34)
+   resolved to 0.40.3 at install time, which has DROPPED the sync client
+   entirely — only `solana.rpc.async_api.AsyncClient` remains. Rewrote
+   SolanaPoEClient to wrap AsyncClient calls with asyncio.run() so the
+   library's public API can stay synchronous for CLI use.
+
+3. get_transaction's default JSON encoding gives raw instruction bytes.
+   Assumed `instruction.data` from a `get_transaction` response would be
+   raw bytes. In practice, the default "json" encoding returns a
+   UiCompiledInstruction whose `data` field is a base58-encoded STRING,
+   not bytes. Switched `fetch_memo` to request `encoding="base64"`,
+   which makes solana-py decode the response into an actual
+   `solders.transaction.VersionedTransaction` with real byte-typed
+   instruction data. Validated this by round-tripping a locally-built,
+   locally-signed memo transaction through the identical decode path
+   (`VersionedTransaction.from_bytes`) with no network call — this is
+   now a permanent regression test (tests/test_client_parsing.py).
+
+4. TxOpts import location.
+   Assumed `TxOpts` lived at `solana.rpc.types.TxOpts` (older solana-py
+   layout). In 0.40.3 it has moved to `solana.rpc.models.TxOpts`.
+   Corrected the import.
+
+================================================================
+STANDING DESIGN ASSUMPTIONS (not explicitly requested, not verified
+against user intent — flagged here for the user to confirm or override)
+================================================================
+
+5. Package/distribution name: "solana-poe" (import name "solana_poe"),
+   chosen arbitrarily since the user did not name the project.
+
+6. Default cluster is "devnet", not "mainnet-beta", so a bare `submit`
+   command cannot accidentally spend real SOL. Mainnet requires an
+   explicit `--cluster mainnet-beta`.
+
+7. Default hash algorithm is sha256 (any hashlib-supported algorithm can
+   be selected via --algo, but sha256 was picked as the default without
+   the user stating a preference).
+
+8. Memo on-chain format is a self-invented, non-standard schema:
+     optional prefix line "solana-poe:v1"
+     one line per file: "<algorithm>:<hex digest>:<salted/path>"
+   Nothing about this text format is a Solana or industry standard —
+   it only needs to be self-consistent between `submit` and `verify`.
+   A different consumer reading the chain directly would need to know
+   this convention. (Updated 2026-09-13: the path component is now the
+   CWD-relative salted path — see entries 22-25 below — not a path
+   relative to the scanned directory as originally implemented.)
+
+9. Default behavior is one Memo transaction PER FILE (higher fee cost,
+   simpler 1:1 mapping). The `--combine` flag batches multiple file
+   hashes into as few transactions as will fit under the memo size
+   limit. Assumed this trade-off (simplicity by default, batching as an
+   opt-in) was reasonable; the user might instead expect batching (or a
+   Merkle-root-of-all-hashes design) to be the default for cost reasons.
+
+10. Memo payload safety ceiling of 566 bytes per transaction, picked
+    conservatively to stay under Solana's 1232-byte transaction size
+    limit after accounting for the signature, header, blockhash, and
+    account keys. This was NOT empirically pushed to the actual on-chain
+    limit — it's a conservative estimate, not a measured maximum.
+
+11. Commitment level "confirmed" (not "finalized") is used for both
+    sending and reading transactions, as a speed/safety balance. This
+    was not specified by the user.
+
+12. Keypair input format is restricted to the Solana CLI JSON keypair
+    file (a JSON array of 64 byte values, e.g. ~/.config/solana/id.json).
+    No support for base58-encoded secret keys, seed phrases, or hardware
+    wallets, since the user didn't specify how they'd supply a signing
+    key.
+
+13. Manifest is a flat JSON array written by default to
+    ./solana-poe-manifest.json in the current directory. Filename and
+    location are arbitrary defaults.
+
+14. `verify` only supports legacy (non-versioned) transactions for
+    reading memos back. If a transaction uses an address lookup table
+    (version 0 with ALT), `fetch_memo` deliberately returns None
+    (unverifiable) rather than attempting to resolve the ALT, because
+    this library only ever constructs legacy transactions itself. A
+    memo posted by some other tool using an ALT-based transaction would
+    not currently verify.
+
+15. CLI implemented with the `click` library rather than argparse or
+    typer — an arbitrary implementation choice.
+
+16. Declared MIT license and Python >=3.9 support in pyproject.toml
+    without the user specifying either.
+
+17. `verify` exits 0 if every manifest entry checks out and 1 if any
+    entry fails or is missing — assumed standard Unix exit-code
+    convention was desired; not specified by the user.
+
+18. Default memo program version for both `submit` and `verify` is v2
+    (current), matching the currently-deployed/maintained Memo program,
+    since the user's request just said "using Memo" without specifying
+    a version.
+
+19. `hash_directory` defaults to recursive=True (walks subdirectories)
+    and returns results sorted alphabetically by relative path for
+    deterministic output. Neither was specified by the user.
+
+20. No built-in retry/backoff for RPC rate-limiting (HTTP 429) is
+    implemented in the library itself. During manual testing against
+    public mainnet/devnet RPC endpoints, 429s were common; the shipped
+    code lets such errors propagate rather than retrying automatically.
+
+================================================================
+IMPLEMENTATION DECISIONS FOR THE "SALT EACH HASH" FEATURE (2026-09-13)
+================================================================
+SUPERSEDED the same day — see the "SALT CHANGED TO FULL ABSOLUTE PATH"
+section further below. Kept here for history: this section describes
+the first iteration, where the salt was the CWD-relative path.
+
+The user explicitly requested: "salt each hash computed using the full
+file path", then clarified: "use the relative filename to the path from
+which the program was run" — i.e. the salt is each file's path relative
+to the current working directory (CWD) at the moment the tool runs, not
+relative to the scanned directory argument and not an absolute path.
+That rule itself is a direct instruction, not an assumption. The
+following sub-decisions made while implementing it were NOT specified
+by the user and are logged here:
+
+22. Salt/digest formula chosen: sha256(salt.encode("utf-8") + b"\x00" +
+    file_bytes), i.e. the salt is prefixed onto the content with a
+    single null-byte separator. Any other prefix/suffix/separator scheme
+    (e.g. HMAC, a length-prefixed encoding) would also satisfy "salt with
+    the path" but produce different digests than this implementation.
+
+23. Unified the existing `FileHash.relative_path` / manifest `path` field
+    to now mean "path relative to CWD at invocation" (the salt itself),
+    rather than adding a second, separate field for the salt alongside
+    the pre-existing "path relative to the scanned directory" field.
+    This was a simplification to avoid duplicate/confusing path concepts
+    throughout the memo, manifest, and CLI output — not something the
+    user asked for explicitly. One consequence: the on-chain memo and
+    manifest "path" no longer describe location within the scanned
+    directory; they describe location relative to wherever `submit` was
+    invoked from.
+
+24. `hash_file()` (the single-file, non-directory API) keeps salting
+    OPTIONAL via a `salt=None` default, so library callers who just want
+    a plain content hash still can. Only `hash_directory()` (and
+    therefore the CLI's `hash`/`submit`/`verify` commands) always salts.
+    The user's instruction was interpreted as "the tool's directory
+    hashing/submission pipeline must salt," not necessarily "every
+    hashing function in the library must be incapable of an unsalted
+    hash."
+
+25. `verify --directory` behavior: local file bytes are read from
+    `<directory>/<entry.path>` as before, but the digest recomputation
+    now always uses `salt=entry.path` (the path recorded at submit time)
+    regardless of what `--directory` points at. This means `verify` is
+    designed to be re-run from the same working directory `submit` was
+    run from (or with `--directory .` there) for paths to resolve
+    correctly; pointing `--directory` at a relocated copy of the files
+    still works for reading bytes, but the salt is always the originally
+    recorded path, not something recomputed from wherever `verify`
+    itself is invoked. This was a design inference to keep `verify`
+    meaningful post-salting; the user did not specify how `verify`
+    should behave when run from a different directory than `submit`.
+
+   Since path separators on Windows differ from POSIX, the CWD-relative
+   salt string is normalized to forward slashes (os.sep replaced with
+   "/") before hashing, so a file salted on Windows and verified on
+   Linux (or vice versa) with the same logical relative path produces
+   the same digest. This normalization was not requested or tested on
+   an actual Windows machine.
+
+================================================================
+SALT CHANGED TO FULL ABSOLUTE PATH (2026-09-13, same day, later)
+================================================================
+The user then said: "change the salt to use the full file path and
+ensure that full file path is in the manifest for each file." This
+replaced the CWD-relative scheme above with the file's full, resolved,
+absolute filesystem path (e.g. "/home/alice/project/my-files/a.txt"),
+obtained via `Path.resolve()`. That is a direct instruction, not an
+assumption. Sub-decisions made while implementing it:
+
+26. Renamed the field carrying this path throughout the codebase from
+    `relative_path` to `full_path` (on `FileHash` and `ManifestEntry`,
+    and in the `hash` command's JSON output key). The user asked to
+    "ensure the full file path is in the manifest," which the prior
+    unified-field design already would have satisfied by just changing
+    what the existing `path` field contained — the rename to `full_path`
+    was an unrequested but deliberate clarity improvement, so the field
+    name itself documents what it holds rather than requiring a reader
+    to infer it.
+
+27. `verify`'s `--directory <path>` option was REMOVED and replaced with
+    a boolean `--check-files/--no-check-files` flag. Reasoning: once
+    `entry.full_path` is absolute, Python's `Path(directory) /
+    entry.full_path` silently discards `directory` and evaluates to
+    `entry.full_path` alone (this is documented pathlib behavior for
+    joining an absolute path onto anything) — so the old `--directory`
+    option would have become a silently broken no-op rather than doing
+    what its help text described. Rather than ship that bug, `verify
+    --check-files` now always reads and re-hashes each file directly
+    from its recorded `full_path`. This means a manifest can currently
+    only be file-checked on the same machine (or at an identical
+    absolute path) it was created on; there is no longer any supported
+    way to verify against a relocated copy of the files. The user did
+    not ask for relocation support to be preserved or dropped — dropping
+    it was inferred as the only non-broken option once the salt became
+    an absolute path, not confirmed with the user.
+
+28. `Path.resolve()` (which also resolves symlinks and normalizes `..`
+    segments) was used to compute the "full path," rather than
+    `os.path.abspath()` (which does not resolve symlinks). This means
+    hashing a file through a symlink records the symlink's target path,
+    not the symlink's own path. Not specified by the user.
+
+================================================================
+KNOWN UNTESTED PATH
+================================================================
+
+21. A fully live `solana-poe submit` against a funded devnet account was
+    NEVER executed end-to-end. The public devnet airdrop faucet was
+    unreachable/rate-limited from the development sandbox on every
+    attempt. Everything that could be verified without spending real
+    funds was verified instead: unit tests, dry-run memo construction,
+    live read-only RPC calls (get_signatures_for_address /
+    get_transaction) against mainnet, and an offline wire-format
+    round-trip of the exact transaction-building and memo-decoding code
+    paths. The actual send_raw_transaction / confirm_transaction flow
+    against a live RPC endpoint has only been verified by reading the
+    installed library's source, not by executing it.

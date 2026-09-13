@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+solana-poe-manifest.json
+devnet-keypair.json
