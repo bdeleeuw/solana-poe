@@ -122,15 +122,20 @@ class SolanaPoEClient:
     def fetch_memo(self, signature: str) -> Optional[str]:
         """Best-effort read of the memo text carried by a confirmed transaction.
 
-        Returns None if the transaction cannot be found or carries no
-        instruction for this client's memo program id.
+        Returns None if the transaction cannot be found, `signature` isn't
+        a validly-formatted signature at all, or the transaction carries
+        no instruction for this client's memo program id.
         """
         return asyncio.run(self._fetch_memo(signature))
 
     async def _fetch_memo(self, signature: str) -> Optional[str]:
+        try:
+            parsed_signature = Signature.from_string(signature)
+        except ValueError:
+            return None
         async with AsyncClient(self.rpc_url, commitment=self.commitment) as client:
             tx_resp = await client.get_transaction(
-                Signature.from_string(signature),
+                parsed_signature,
                 encoding="base64",
                 commitment=self.commitment,
                 max_supported_transaction_version=0,

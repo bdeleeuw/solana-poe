@@ -68,15 +68,15 @@ against user intent — flagged here for the user to confirm or override)
    be selected via --algo, but sha256 was picked as the default without
    the user stating a preference).
 
-8. Memo on-chain format is a self-invented, non-standard schema:
-     optional prefix line "solana-poe:v1"
-     one line per file: "<algorithm>:<hex digest>:<salted/path>"
-   Nothing about this text format is a Solana or industry standard —
-   it only needs to be self-consistent between `submit` and `verify`.
-   A different consumer reading the chain directly would need to know
-   this convention. (Updated 2026-09-13: the path component is now the
-   CWD-relative salted path — see entries 22-25 below — not a path
-   relative to the scanned directory as originally implemented.)
+8. Memo on-chain format is a self-invented, non-standard schema.
+   SUPERSEDED 2026-09-13 (later same day as entries 22-25 below, by
+   direct user instruction): the memo now contains ONLY the raw hex
+   digest(s), space-separated, optionally preceded by a "solana-poe:v1"
+   prefix line — no algorithm, no path. `full_path` and `algorithm` are
+   recorded in the manifest instead (per the same instruction). This
+   means the on-chain memo alone no longer identifies which file/path/
+   algorithm produced a given hash; only the manifest does. See the new
+   section near the end of this file for the full account.
 
 9. Default behavior is one Memo transaction PER FILE (higher fee cost,
    simpler 1:1 mapping). The `--combine` flag batches multiple file
@@ -158,6 +158,10 @@ by the user and are logged here:
     single null-byte separator. Any other prefix/suffix/separator scheme
     (e.g. HMAC, a length-prefixed encoding) would also satisfy "salt with
     the path" but produce different digests than this implementation.
+    CONFIRMED by the user 2026-09-13: when asked directly whether to keep
+    this separator or switch to pure concatenation (no separator, matching
+    "prepended" literally), the user chose to keep it. No longer a
+    standing/unconfirmed assumption.
 
 23. Unified the existing `FileHash.relative_path` / manifest `path` field
     to now mean "path relative to CWD at invocation" (the salt itself),
@@ -241,6 +245,60 @@ assumption. Sub-decisions made while implementing it:
     `os.path.abspath()` (which does not resolve symlinks). This means
     hashing a file through a symlink records the symlink's target path,
     not the symlink's own path. Not specified by the user.
+
+================================================================
+MEMO CONTENT CHANGED TO HASH-ONLY (2026-09-13, same day, later still)
+================================================================
+The user said: "change the memo to contain just the sha256 hash values,
+separated by a space, where the hash values are computed for each file
+but with the full file path prepended. full file path, algorithm, and
+hash should all be in the manifest." Before implementing, asked the
+user directly whether "prepended" meant removing the null-byte separator
+from entry 22's salt formula or just restating that existing formula in
+plain language — user chose to keep the separator (see entry 22's
+update above). That resolved, the rest was implemented as a direct
+instruction:
+
+- The memo body changed from one `algorithm:hash:full_path` line per
+  file (newline-separated across a `--combine` batch) to just the raw
+  hex digest(s), space-separated, with no algorithm and no path.
+- `ManifestEntry`/`FileHash` already had `full_path`, `algorithm`, and
+  `hash` fields (from the prior full-path-salting change), so "full file
+  path, algorithm, and hash should all be in the manifest" required no
+  schema change — it was already satisfied, and is called out here only
+  because the user's instruction implies it should be double-checked,
+  not because anything was added.
+
+Sub-decisions made while implementing, NOT specified by the user:
+
+29. `verify`'s on-chain check changed from `expected_line in
+    memo.splitlines()` (exact full-line match) to `entry.hash in
+    memo.split()` (exact whitespace-separated token match). This was the
+    direct/necessary consequence of the format change, not a separate
+    design choice, but the specific decision to match on
+    whitespace-split *tokens* (rather than e.g. a substring search) was
+    made to guarantee a hash can't spuriously match as a prefix of a
+    different, longer token — verified by a dedicated test
+    (`test_verify_does_not_match_hash_as_a_substring_of_another_token`).
+
+30. The `--memo-prefix` tag-line feature (default `"solana-poe:v1"`,
+    already existing before this change) was NOT removed, even though
+    the user's phrasing was "contain **just** the sha256 hash values."
+    Interpreted "just" as contrasting with the old per-file
+    `algorithm:hash:path` triple (i.e. "just the hash, not those other
+    two fields"), not as a request to also drop the unrelated,
+    pre-existing prefix-tag feature. Not confirmed with the user.
+
+31. Since a raw hash digest's byte length is fixed per algorithm (e.g.
+    always 64 ASCII hex chars for sha256) and always comfortably under
+    `MAX_MEMO_BYTES`, the "single value too large to fit in any memo"
+    safety check added earlier (see the four-bugs QA fix) is now
+    effectively unreachable through a long file path — the only
+    remaining way to trigger it is an excessively long `--memo-prefix`.
+    Kept the check in place anyway (harmless, generic, defends against
+    a pathological prefix or a future algorithm with a huge digest), and
+    rewrote its regression test to trigger via `--memo-prefix` instead
+    of a deeply nested directory path.
 
 ================================================================
 KNOWN UNTESTED PATH

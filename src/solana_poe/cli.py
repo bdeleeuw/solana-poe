@@ -33,7 +33,11 @@ def main() -> None:
 @click.option("--output", type=click.Path(path_type=Path), help="Write results as JSON to this file instead of stdout.")
 def hash_cmd(directory: Path, algo: str, recursive: bool, output: Optional[Path]) -> None:
     """Hash every file in DIRECTORY. No blockchain interaction."""
-    results = hash_directory(directory, algorithm=algo, recursive=recursive)
+    try:
+        results = hash_directory(directory, algorithm=algo, recursive=recursive)
+    except ValueError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(1)
     payload = [
         {"full_path": r.full_path, "algorithm": r.algorithm, "hash": r.digest, "size": r.size}
         for r in results
@@ -89,20 +93,44 @@ def submit_cmd(
     dry_run: bool,
 ) -> None:
     """Hash every file in DIRECTORY and post each hash to Solana as a Memo transaction."""
-    results = hash_directory(directory, algorithm=algo, recursive=recursive)
+    try:
+        results = hash_directory(directory, algorithm=algo, recursive=recursive)
+    except ValueError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(1)
     if not results:
         click.echo("no files found", err=True)
         sys.exit(1)
 
-    lines = [f"{algo}:{r.digest}:{r.full_path}" for r in results]
+    # Each memo carries only the raw hash values -- no algorithm, no path.
+    # full_path/algorithm/hash are recorded in the manifest instead; see
+    # ARCHITECTURE.md for the trade-off this implies for on-chain-only
+    # verification.
+    hashes = [r.digest for r in results]
+
+    oversized = [
+        results[i].full_path
+        for i, h in enumerate(hashes)
+        if len((f"{memo_prefix}\n{h}" if memo_prefix else h).encode("utf-8")) > MAX_MEMO_BYTES
+    ]
+    if oversized:
+        click.echo(
+            f"error: {len(oversized)} file hash(es) can't fit in a single memo "
+            f"(limit {MAX_MEMO_BYTES} bytes including the memo prefix) even alone, "
+            "so no combination of batching can send them. Nothing was submitted:",
+            err=True,
+        )
+        for p in oversized:
+            click.echo(f"  {p}", err=True)
+        sys.exit(1)
 
     batches: list = []
     if combine:
         header_len = len(memo_prefix.encode("utf-8")) + 1 if memo_prefix else 0
         current: list = []
         current_len = header_len
-        for idx, line in enumerate(lines):
-            added_len = len(line.encode("utf-8")) + 1
+        for idx, h in enumerate(hashes):
+            added_len = len(h.encode("utf-8")) + 1
             if current and current_len + added_len > MAX_MEMO_BYTES:
                 batches.append(current)
                 current = []
@@ -116,7 +144,7 @@ def submit_cmd(
 
     memos = []
     for batch in batches:
-        body = "\n".join(lines[i] for i in batch)
+        body = " ".join(hashes[i] for i in batch)
         memos.append(f"{memo_prefix}\n{body}" if memo_prefix else body)
 
     if dry_run:
@@ -176,14 +204,17 @@ def submit_cmd(
 @click.option("--memo-program", type=click.Choice(sorted(MEMO_PROGRAM_IDS)), default="v2", show_default=True)
 def verify_cmd(manifest_path: Path, check_files: bool, memo_program: str) -> None:
     """Re-fetch each manifest entry's transaction and confirm its memo matches the recorded hash."""
-    entries = read_manifest(manifest_path)
+    try:
+        entries = read_manifest(manifest_path)
+    except ValueError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(1)
     program_id = _memo_program_id(memo_program)
     clients: Dict[str, SolanaPoEClient] = {}
     memo_cache: Dict[str, Optional[str]] = {}
     all_ok = True
 
     for entry in entries:
-        expected_line = f"{entry.algorithm}:{entry.hash}:{entry.full_path}"
         chain_status = "SKIPPED (no signature)"
 
         if entry.signature:
@@ -197,7 +228,7 @@ def verify_cmd(manifest_path: Path, check_files: bool, memo_program: str) -> Non
             if memo is None:
                 chain_status = "FAIL (transaction or memo not found)"
                 all_ok = False
-            elif expected_line in memo.splitlines():
+            elif entry.hash in memo.split():
                 chain_status = "OK"
             else:
                 chain_status = "FAIL (hash not present in on-chain memo)"
@@ -210,12 +241,17 @@ def verify_cmd(manifest_path: Path, check_files: bool, memo_program: str) -> Non
                 file_status = " | file: MISSING"
                 all_ok = False
             else:
-                actual = hash_file(local_path, entry.algorithm, salt=entry.full_path)
-                if actual == entry.hash:
-                    file_status = " | file: OK"
-                else:
-                    file_status = " | file: MISMATCH"
+                try:
+                    actual = hash_file(local_path, entry.algorithm, salt=entry.full_path)
+                except ValueError as exc:
+                    file_status = f" | file: ERROR ({exc})"
                     all_ok = False
+                else:
+                    if actual == entry.hash:
+                        file_status = " | file: OK"
+                    else:
+                        file_status = " | file: MISMATCH"
+                        all_ok = False
 
         click.echo(f"{entry.full_path}: chain={chain_status}{file_status}")
 

@@ -27,5 +27,24 @@ def write_manifest(entries: List[ManifestEntry], path: Path) -> None:
 
 
 def read_manifest(path: Path) -> List[ManifestEntry]:
-    data = json.loads(Path(path).read_text())
-    return [ManifestEntry(**item) for item in data]
+    """Load a manifest, raising `ValueError` with a clear message if the
+    file isn't valid JSON or its entries don't match `ManifestEntry`'s
+    schema, instead of letting a raw JSONDecodeError/TypeError propagate.
+    """
+    try:
+        data = json.loads(Path(path).read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
+
+    if not isinstance(data, list):
+        raise ValueError(f"{path} must contain a JSON array of manifest entries")
+
+    entries = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: entry {i} is not a JSON object")
+        try:
+            entries.append(ManifestEntry(**item))
+        except TypeError as exc:
+            raise ValueError(f"{path}: entry {i} doesn't match the manifest schema: {exc}") from exc
+    return entries

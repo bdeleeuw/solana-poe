@@ -79,12 +79,22 @@ content or a path relative to anything. This means:
 
 ## Memo format
 
-Each memo is one or more lines of `algorithm:hexdigest:full/path`,
-optionally preceded by a `--memo-prefix` tag line (default
-`solana-poe:v1`), where `full/path` is the same absolute path used as
-the hash salt above. This keeps the on-chain data self-describing and
-independently auditable in any Solana explorer, without needing this
-tool.
+Each memo contains just the raw hex digests, space-separated (one per
+file the memo covers), optionally preceded by a `--memo-prefix` tag line
+(default `solana-poe:v1`) on its own line above them:
+
+```
+solana-poe:v1
+9c1185a5c5e9fc54612808977ee8f548b2258d31 4a7d1ed414474e4033ac29ccb8653d9b
+```
+
+The memo does **not** contain the algorithm or the file path — only the
+manifest does (see below). This keeps memos small (letting `--combine`
+pack far more files per transaction), at the cost of the on-chain data
+no longer being self-describing: reading a transaction on a Solana
+explorer tells you a hash was anchored at that block time, but not which
+file, path, or algorithm produced it — you need the corresponding
+manifest for that.
 
 ## Manifest format
 
@@ -123,8 +133,10 @@ client = SolanaPoEClient(
 for r in results:
     # r.digest is already salted with r.full_path (the file's resolved,
     # absolute path); hash_file(path) alone, with no salt argument,
-    # gives the unsalted content hash if you need that too.
-    receipt = client.send_memo(f"sha256:{r.digest}:{r.full_path}")
+    # gives the unsalted content hash if you need that too. The memo
+    # itself carries only the hash -- keep full_path/algorithm yourself
+    # (e.g. in your own manifest) if you'll need them later.
+    receipt = client.send_memo(r.digest)
     print(r.full_path, receipt.signature)
 ```
 
@@ -133,7 +145,8 @@ for r in results:
 - Fee payer needs SOL in the target cluster (use `solana airdrop` on
   devnet/testnet).
 - A transaction's memo is limited to a few hundred bytes; `--combine` packs
-  as many file entries per transaction as fit under that limit rather than
-  failing.
+  as many hash values per transaction as fit under that limit. If even a
+  single hash can't fit alone (e.g. an extremely long `--memo-prefix`),
+  `submit` refuses to send anything rather than partially submitting.
 - `--cluster` defaults to `devnet`. Use `--cluster mainnet-beta` (real SOL)
   or `--rpc-url` for a custom/private endpoint.
