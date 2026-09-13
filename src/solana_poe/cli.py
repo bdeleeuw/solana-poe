@@ -63,10 +63,11 @@ def hash_cmd(directory: Path, algo: str, recursive: bool, output: Optional[Path]
 @click.option("--algo", default=DEFAULT_ALGORITHM, show_default=True)
 @click.option("--recursive/--no-recursive", default=True, show_default=True)
 @click.option(
-    "--combine/--no-combine",
+    "--individual",
+    is_flag=True,
     default=False,
     show_default=True,
-    help="Pack multiple file hashes into as few memo transactions as possible instead of one transaction per file.",
+    help="Submit one transaction per file instead of the default: packing as many file hashes as fit into each memo.",
 )
 @click.option("--memo-prefix", default=DEFAULT_MEMO_PREFIX, show_default=True)
 @click.option("--memo-program", type=click.Choice(sorted(MEMO_PROGRAM_IDS)), default="v2", show_default=True)
@@ -86,7 +87,7 @@ def submit_cmd(
     rpc_url: Optional[str],
     algo: str,
     recursive: bool,
-    combine: bool,
+    individual: bool,
     memo_prefix: str,
     memo_program: str,
     manifest_path: Path,
@@ -125,7 +126,9 @@ def submit_cmd(
         sys.exit(1)
 
     batches: list = []
-    if combine:
+    if individual:
+        batches = [[i] for i in range(len(results))]
+    else:
         header_len = len(memo_prefix.encode("utf-8")) + 1 if memo_prefix else 0
         current: list = []
         current_len = header_len
@@ -139,8 +142,6 @@ def submit_cmd(
             current_len += added_len
         if current:
             batches.append(current)
-    else:
-        batches = [[i] for i in range(len(results))]
 
     memos = []
     for batch in batches:

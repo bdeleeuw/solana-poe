@@ -21,8 +21,9 @@ Hash a directory locally (no blockchain interaction):
 solana-poe hash ./my-files
 ```
 
-Post each file's hash to devnet as a Memo transaction, one transaction per
-file, and record the results in a manifest:
+Post each file's hash to devnet as Memo transactions, packing as many
+hashes as fit into as few transactions as possible by default, and record
+the results in a manifest:
 
 ```bash
 solana-poe submit ./my-files \
@@ -31,11 +32,11 @@ solana-poe submit ./my-files \
   --manifest manifest.json
 ```
 
-Pack multiple file hashes into as few memo transactions as possible
-(cheaper, at the cost of one transaction covering several files):
+Send one transaction per file instead (more expensive, but a strict 1:1
+mapping between files and transactions):
 
 ```bash
-solana-poe submit ./my-files --keypair ~/.config/solana/id.json --combine
+solana-poe submit ./my-files --keypair ~/.config/solana/id.json --individual
 ```
 
 Preview the memos that would be sent without spending anything or touching
@@ -89,8 +90,9 @@ solana-poe:v1
 ```
 
 The memo does **not** contain the algorithm or the file path — only the
-manifest does (see below). This keeps memos small (letting `--combine`
-pack far more files per transaction), at the cost of the on-chain data
+manifest does (see below). This keeps memos small, letting the default
+(combined) mode pack far more files per transaction than the old
+`algo:hash:path`-per-line format could, at the cost of the on-chain data
 no longer being self-describing: reading a transaction on a Solana
 explorer tells you a hash was anchored at that block time, but not which
 file, path, or algorithm produced it — you need the corresponding
@@ -144,9 +146,11 @@ for r in results:
 
 - Fee payer needs SOL in the target cluster (use `solana airdrop` on
   devnet/testnet).
-- A transaction's memo is limited to a few hundred bytes; `--combine` packs
-  as many hash values per transaction as fit under that limit. If even a
-  single hash can't fit alone (e.g. an extremely long `--memo-prefix`),
-  `submit` refuses to send anything rather than partially submitting.
+- A transaction's memo is limited to a few hundred bytes; by default
+  `submit` packs as many hash values per transaction as fit under that
+  limit (`--individual` opts out, one transaction per file instead). If
+  even a single hash can't fit alone (e.g. an extremely long
+  `--memo-prefix`), `submit` refuses to send anything rather than
+  partially submitting.
 - `--cluster` defaults to `devnet`. Use `--cluster mainnet-beta` (real SOL)
   or `--rpc-url` for a custom/private endpoint.

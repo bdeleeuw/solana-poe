@@ -301,17 +301,73 @@ Sub-decisions made while implementing, NOT specified by the user:
     of a deeply nested directory path.
 
 ================================================================
+BATCHING FLIPPED TO DEFAULT-ON (2026-09-13, same day, later still)
+================================================================
+The user said: "make the --combine CLI parameter be the default behavior
+and only transact for individual files if --individual CLI parameter is
+specified." A direct instruction, implemented literally:
+
+- `--combine/--no-combine` (default off) was replaced with a single
+  `--individual` flag (default off). Batching (the old `--combine`
+  behavior) is now what happens when no flag is given at all; passing
+  `--individual` reverts to the old default (one transaction per file).
+- No sub-decisions of note — the mapping from the request to the
+  implementation was unambiguous. The one thing NOT done: `--combine`
+  was removed outright rather than kept as a deprecated no-op alias,
+  since the user asked for a replacement ("only ... if --individual is
+  specified"), not an addition, and the tool has no real users yet to
+  break.
+
+================================================================
+RESOLVED: FIRST LIVE DEVNET SUBMIT (2026-09-13, same day, later still)
+================================================================
+Item 21 below is now OUT OF DATE. The user funded the devnet wallet
+(3ysGrzEtkkAJajjtHdNL2CnzBbx9GkeTpYWyxah2mrK3) and asked for a live
+verification: "verify operation on devnet using a new test folder with
+eight files of varying length. Ensure devnet blocks contain the correct
+values according to the manifest."
+
+The FIRST real `submit` attempt (8 files, default combined mode, a
+533-byte memo) failed -- not from any bug in the size-limit logic
+itself, but because Solana's default 200,000 compute-unit budget is
+insufficient for the Memo program to process a memo that large (see the
+new DEVELOPMENT_NOTES.md entry and the corresponding ARCHITECTURE.md
+update for the full technical account). This was a genuine, previously
+undiscovered defect -- no amount of dry-run/offline/unit testing could
+have caught it, since it's about on-chain compute cost, not wire format.
+Fixed by adding an explicit ComputeBudget::SetComputeUnitLimit
+instruction (client.build_memo_instructions, DEFAULT_COMPUTE_UNIT_LIMIT
+= 300_000, not a user-specified value -- chosen empirically, verified
+sufficient with margin at the full MAX_MEMO_BYTES ceiling on live
+devnet).
+
+After the fix, the same 8-file submit succeeded for real
+(signature 5wbQaMtQyfgpLmd7PRsotG7m1Wbo8hUULUhHUmygGwMsrHCXf8CMFGamFchND
+MRhyEeGYtJuBRgEzyKWGBAXovgE, slot 497923933). Verified three independent
+ways, not just via the tool's own `verify` command (which could share a
+bug with `submit` and falsely agree with itself): (1) `solana-poe verify
+--check-files` reported OK for all 8 entries; (2) the raw transaction was
+independently re-fetched with jsonParsed encoding (a different decode
+path than client.py's own base64+solders route) and its on-chain
+`Program log: Memo (len 533): "..."` line was confirmed byte-for-byte
+against the manifest; (3) all 8 files were re-hashed fresh from disk,
+independent of the manifest, and matched both the manifest and the
+on-chain memo exactly. Slot and block_time recorded in the manifest also
+matched the chain's own values for that signature.
+
+================================================================
 KNOWN UNTESTED PATH
 ================================================================
 
-21. A fully live `solana-poe submit` against a funded devnet account was
-    NEVER executed end-to-end. The public devnet airdrop faucet was
-    unreachable/rate-limited from the development sandbox on every
-    attempt. Everything that could be verified without spending real
-    funds was verified instead: unit tests, dry-run memo construction,
-    live read-only RPC calls (get_signatures_for_address /
+21. SUPERSEDED above: a fully live `solana-poe submit` against a funded
+    devnet account was NEVER executed end-to-end. The public devnet
+    airdrop faucet was unreachable/rate-limited from the development
+    sandbox on every attempt. Everything that could be verified without
+    spending real funds was verified instead: unit tests, dry-run memo
+    construction, live read-only RPC calls (get_signatures_for_address /
     get_transaction) against mainnet, and an offline wire-format
     round-trip of the exact transaction-building and memo-decoding code
     paths. The actual send_raw_transaction / confirm_transaction flow
-    against a live RPC endpoint has only been verified by reading the
-    installed library's source, not by executing it.
+    against a live RPC endpoint had only been verified by reading the
+    installed library's source, not by executing it -- until the user
+    funded the wallet and asked for a live test (see above).

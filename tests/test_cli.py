@@ -82,7 +82,8 @@ def test_submit_dry_run_memo_is_just_the_hash_no_path_or_algorithm(tmp_path: Pat
     assert ":" not in memo_body
 
 
-def test_submit_dry_run_combine_joins_multiple_hashes_with_a_space(tmp_path: Path, tmp_path_factory) -> None:
+def test_submit_dry_run_default_combines_multiple_hashes_into_one_memo(tmp_path: Path, tmp_path_factory) -> None:
+    # Combining is the default now -- no --combine flag needed.
     (tmp_path / "a.txt").write_text("one")
     (tmp_path / "b.txt").write_text("two")
     keypair = tmp_path_factory.mktemp("kp") / "id.json"
@@ -90,14 +91,35 @@ def test_submit_dry_run_combine_joins_multiple_hashes_with_a_space(tmp_path: Pat
 
     result = CliRunner().invoke(
         main,
-        ["submit", str(tmp_path), "--keypair", str(keypair), "--memo-prefix", "", "--combine", "--dry-run"],
+        ["submit", str(tmp_path), "--keypair", str(keypair), "--memo-prefix", "", "--dry-run"],
     )
     assert result.exit_code == 0, result.output
+    assert "memo 1/1" in result.output
     lines = [line for line in result.output.splitlines() if line.strip()]
     memo_body = lines[-1]
     tokens = memo_body.split(" ")
     assert len(tokens) == 2
     assert all(len(t) == 64 for t in tokens)  # sha256 hex digests
+
+
+def test_submit_dry_run_individual_flag_sends_one_memo_per_file(tmp_path: Path, tmp_path_factory) -> None:
+    (tmp_path / "a.txt").write_text("one")
+    (tmp_path / "b.txt").write_text("two")
+    keypair = tmp_path_factory.mktemp("kp") / "id.json"
+    keypair.write_text("[]")
+
+    result = CliRunner().invoke(
+        main,
+        ["submit", str(tmp_path), "--keypair", str(keypair), "--memo-prefix", "", "--individual", "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "memo 1/2" in result.output
+    assert "memo 2/2" in result.output
+    memo_lines = [line for line in result.output.splitlines() if line.strip() and not line.startswith("---")]
+    assert len(memo_lines) == 2
+    for line in memo_lines:
+        assert " " not in line
+        assert len(line) == 64  # a lone sha256 hex digest, no other file's hash joined in
 
 
 def test_verify_rejects_invalid_json_manifest(tmp_path: Path) -> None:

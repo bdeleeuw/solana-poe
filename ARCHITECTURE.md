@@ -40,10 +40,10 @@ text embedded `algorithm:hash:full_path` per file; it now carries only
 the raw hex digest(s), space-separated. `full_path` and `algorithm` are
 salted into/associated with the hash and recorded in the manifest, but
 deliberately not repeated on-chain. Trade-off: memos are far smaller
-(letting `--combine` pack many more files per transaction), but the
-on-chain data alone no longer identifies which file, path, or algorithm
-produced a given hash — `verify` (and anyone else) needs the manifest
-for that, not just a block explorer.
+(letting the default combined mode pack many more files per
+transaction), but the on-chain data alone no longer identifies which
+file, path, or algorithm produced a given hash — `verify` (and anyone
+else) needs the manifest for that, not just a block explorer.
 
 **The RPC client wraps solana-py's async API in `asyncio.run()`.**
 solana-py dropped its synchronous `Client`/`Transaction` API somewhere
@@ -64,15 +64,27 @@ refuses to parse any transaction that used an address lookup table
 accounts. This is fine for memos this tool created; a memo posted by some
 other tool using an ALT-based transaction will not verify here.
 
-**One Memo transaction per file by default; `--combine` batches.**
-Default behavior favors a simple 1:1 mapping between files and
-transactions over minimizing fee cost. `--combine` packs as many raw
-hash values (space-separated) as fit under a conservative per-memo byte
-ceiling (`MAX_MEMO_BYTES` in `memo.py`) into one transaction. `submit`
-checks every hash fits under that ceiling *before* batching or sending
-anything, so a value that can't fit even alone aborts the whole run with
-nothing submitted, rather than partially submitting and crashing
-mid-batch.
+**Every memo transaction includes an explicit compute-budget bump.**
+`client.build_memo_instructions` always prepends a
+`ComputeBudget::SetComputeUnitLimit` instruction (300,000 CU) ahead of
+the memo instruction. Discovered via the first real devnet send: the
+Memo program's cost scales with memo length (dominated by logging), and
+Solana's default 200,000 CU budget is exhausted well before
+`MAX_MEMO_BYTES`'s 566-byte wire-size ceiling is reached (measured
+failure at 533 bytes). See `DEVELOPMENT_NOTES.md` for the full
+bisection. `MAX_MEMO_BYTES` itself is unchanged — it still reflects the
+transaction wire-size limit — but without this compute bump, a
+transaction can be wire-size-valid and still fail on-chain.
+
+**Batched transactions by default; `--individual` opts into one-per-file.**
+By default `submit` packs as many raw hash values (space-separated) as
+fit under a conservative per-memo byte ceiling (`MAX_MEMO_BYTES` in
+`memo.py`) into each transaction, minimizing fee cost. `--individual`
+reverts to a strict 1:1 mapping between files and transactions instead.
+Either way, `submit` checks every hash fits under that ceiling *before*
+batching or sending anything, so a value that can't fit even alone
+aborts the whole run with nothing submitted, rather than partially
+submitting and crashing mid-batch.
 
 **Default cluster is devnet, not mainnet-beta.** A bare `submit` cannot
 accidentally spend real SOL; mainnet requires an explicit

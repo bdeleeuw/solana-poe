@@ -1,7 +1,9 @@
 from .client import (
     CLUSTER_URLS,
+    DEFAULT_COMPUTE_UNIT_LIMIT,
     MemoReceipt,
     SolanaPoEClient,
+    build_memo_instructions,
     extract_memo,
     load_keypair,
     resolve_rpc_url,
@@ -12,8 +14,10 @@ from .memo import MAX_MEMO_BYTES, MEMO_PROGRAM_ID_V1, MEMO_PROGRAM_ID_V2, build_
 
 __all__ = [
     "CLUSTER_URLS",
+    "DEFAULT_COMPUTE_UNIT_LIMIT",
     "MemoReceipt",
     "SolanaPoEClient",
+    "build_memo_instructions",
     "extract_memo",
     "load_keypair",
     "resolve_rpc_url",

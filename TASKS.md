@@ -6,23 +6,31 @@ added, completed, or reprioritized.
 
 ## Open
 
-1. [ ] **Fund the devnet wallet.** Address:
-   `3ysGrzEtkkAJajjtHdNL2CnzBbx9GkeTpYWyxah2mrK3` (keypair file:
-   `devnet-keypair.json`, gitignored — do not commit). The public devnet
-   airdrop faucet was unreachable from the dev sandbox on every attempt
-   (see `DEVELOPMENT_NOTES.md`). Needed to run `solana-poe submit`
-   end-to-end against a live cluster for the first time — see
-   `ClaudeAssumptions.txt` item 21.
-
-2. [ ] **Push the local commit to GitHub.** Remote `origin` is already
-   set to `https://github.com/bdeleeuw/solana-poe.git` and the initial
-   commit (`e2af65b`, branch `master`) is ready to go. Blocked on
-   credentials: this sandbox has no `gh` CLI, SSH key, or stored git
-   credentials, and the session's safety classifier blocks both
-   embedding a token in the push command and writing a credentials file
-   to disk (see `DEVELOPMENT_NOTES.md`). Needs to be run from outside
-   the sandbox, or with a user-approved auth method.
+1. [ ] **Commit and push the compute-budget fix.** `client.py`'s
+   `build_memo_instructions` now prepends a `ComputeBudget::
+   SetComputeUnitLimit` instruction to every memo transaction (see
+   `DEVELOPMENT_NOTES.md`) — a real bug found via the first live devnet
+   submit, not yet committed. Recommend committing before doing anything
+   else with this repo, since the previous behavior could fail on-chain
+   for any realistically-sized combined memo.
 
 ## Done
 
-(none yet)
+- [x] **Push the local commit(s) to GitHub.** Resolved via a session-generated
+  SSH keypair (`~/.ssh/id_ed25519_solana_poe`) that the user added to their
+  GitHub account's SSH keys; remote `origin` switched from HTTPS to
+  `git@github.com:bdeleeuw/solana-poe.git`. `main` now tracks `origin/main`
+  at commit `e7be4bf`. (Embedding a token in the push command and writing a
+  credentials file were both blocked by the session's safety classifier;
+  generating a fresh SSH key for this purpose was not.)
+
+- [x] **Fund the devnet wallet and verify live operation.** User funded
+  `3ysGrzEtkkAJajjtHdNL2CnzBbx9GkeTpYWyxah2mrK3` via their own means (the
+  public faucet remained unreachable from this sandbox). Ran a real
+  `submit` against 8 files of varying length (0 to ~26KB); first attempt
+  failed on-chain (compute budget exhaustion, see the new Open item
+  above), second attempt succeeded after the fix. Independently verified
+  the on-chain memo, the manifest, and a fresh local re-hash all agree
+  exactly — see `ClaudeAssumptions.txt`'s "RESOLVED: FIRST LIVE DEVNET
+  SUBMIT" section for the full account. Signature:
+  `5wbQaMtQyfgpLmd7PRsotG7m1Wbo8hUULUhHUmygGwMsrHCXf8CMFGamFchNDMRhyEeGYtJuBRgEzyKWGBAXovgE`.

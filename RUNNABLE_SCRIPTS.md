@@ -28,9 +28,9 @@ does.
 
 ## `solana-poe submit DIRECTORY --keypair PATH [options]`
 
-Hashes every file, builds one Memo transaction per file (or batched, see
-`--combine`), signs and sends each with the given keypair, and writes a
-JSON manifest.
+Hashes every file, builds Memo transaction(s) (batched by default, or
+one per file with `--individual`), signs and sends each with the given
+keypair, and writes a JSON manifest.
 
 - `--keypair PATH` (required) — Solana CLI JSON keypair file; pays fees
   and signs.
@@ -38,13 +38,14 @@ JSON manifest.
   — ignored if `--rpc-url` is given.
 - `--rpc-url URL` — overrides `--cluster`.
 - `--algo`, `--recursive/--no-recursive` — same as `hash`.
-- `--combine/--no-combine` (default: one transaction per file) — when
-  set, packs as many raw hash values (space-separated) as fit under
-  `MAX_MEMO_BYTES` (566 bytes, a conservative estimate — see
-  `memo.py`) into each transaction, rather than one hash per
-  transaction. Batch boundaries are determined by encoded byte length,
-  not file count, so batch sizes vary. The memo itself contains only
-  hash values — no algorithm, no path; those live in the manifest only.
+- `--individual` (default off, i.e. batching is the default) — send one
+  transaction per file instead of packing multiple hashes into each
+  memo. Without it, `submit` packs as many raw hash values
+  (space-separated) as fit under `MAX_MEMO_BYTES` (566 bytes, a
+  conservative estimate — see `memo.py`) into each transaction. Batch
+  boundaries are determined by encoded byte length, not file count, so
+  batch sizes vary. The memo itself contains only hash values — no
+  algorithm, no path; those live in the manifest only.
 - `--memo-prefix` (default `solana-poe:v1`) — first line of every memo;
   pass `""` (empty) to omit it entirely. Since it's counted against the
   same `MAX_MEMO_BYTES` ceiling as the hashes, an unreasonably long
@@ -59,7 +60,7 @@ JSON manifest.
   pass a different path.
 - `--dry-run` — hashes files and prints the exact memo text/byte counts
   that would be sent, but does not touch the network or require a valid
-  keypair balance. Useful for previewing `--combine` batching.
+  keypair balance. Useful for previewing batching.
 
 **Caveats:**
 - `submit` currently has no confirmed live devnet run — the public

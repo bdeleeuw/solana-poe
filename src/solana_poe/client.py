@@ -9,12 +9,22 @@ from typing import Optional
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Commitment, Confirmed
 from solana.rpc.models import TxOpts
+from solders.compute_budget import set_compute_unit_limit
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solders.signature import Signature
 from solders.transaction import Transaction
 
 from .memo import MEMO_PROGRAM_ID_V2, build_memo_instruction
+
+# The Memo program's cost is dominated by logging the memo text, which
+# scales with its length; Solana's default 200,000 compute unit budget
+# runs out somewhere around 500-530 bytes of memo, well below the wire
+# format's own ~1232-byte transaction size limit. Discovered by an actual
+# devnet send failing with ProgramFailedToComplete ("exceeded CUs meter")
+# at 533 bytes while 500 succeeded -- see DEVELOPMENT_NOTES.md. Empirically
+# verified sufficient (with margin) at the full MAX_MEMO_BYTES ceiling.
+DEFAULT_COMPUTE_UNIT_LIMIT = 300_000
 
 CLUSTER_URLS = {
     "mainnet-beta": "https://api.mainnet-beta.solana.com",
@@ -52,6 +62,23 @@ class MemoReceipt:
     memo: str
 
 
+def build_memo_instructions(
+    payer: Pubkey,
+    memo: str,
+    program_id: Pubkey = MEMO_PROGRAM_ID_V2,
+    compute_unit_limit: int = DEFAULT_COMPUTE_UNIT_LIMIT,
+) -> list:
+    """Instructions for a memo transaction: a compute-budget bump ahead of
+    the memo instruction itself, since the default 200,000 CU budget is
+    not enough for the Memo program to process a large memo (see
+    DEFAULT_COMPUTE_UNIT_LIMIT above).
+    """
+    return [
+        set_compute_unit_limit(compute_unit_limit),
+        build_memo_instruction(payer, memo, program_id=program_id),
+    ]
+
+
 class SolanaPoEClient:
     """Synchronous wrapper around solana-py's AsyncClient for sending and
     reading Memo transactions. solana-py ships an async-only RPC client;
@@ -78,7 +105,7 @@ class SolanaPoEClient:
         return asyncio.run(self._send_memo(memo, max_retries))
 
     async def _send_memo(self, memo: str, max_retries: int) -> MemoReceipt:
-        instruction = build_memo_instruction(
+        instructions = build_memo_instructions(
             self.keypair.pubkey(), memo, program_id=self.memo_program_id
         )
         async with AsyncClient(self.rpc_url, commitment=self.commitment) as client:
@@ -87,7 +114,7 @@ class SolanaPoEClient:
             ).value.blockhash
 
             tx = Transaction.new_signed_with_payer(
-                [instruction],
+                instructions,
                 self.keypair.pubkey(),
                 [self.keypair],
                 recent_blockhash,
