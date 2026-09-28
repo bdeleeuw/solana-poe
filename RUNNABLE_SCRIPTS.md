@@ -7,26 +7,52 @@ plays the same role the global convention gives `scripts/`: what each
 command does, its arguments, and caveats that don't show up in `--help`.
 Keep this in sync with `cli.py` whenever a command or option changes.
 
-## `solana-poe hash DIRECTORY`
+## `solana-poe hash PATHS...`
 
-Hashes every file under `DIRECTORY` and prints (or writes) JSON. No
-network access, no keypair needed — this is the only command with zero
-blockchain interaction.
+Hashes every file resolved from one or more `PATHS` and prints (or
+writes) JSON. No network access, no keypair needed — this is the only
+command with zero blockchain interaction.
+
+Each `PATH` is resolved by `hashing.resolve_targets()` (shared with
+`submit`):
+- an existing file — hashed directly.
+- an existing directory — every file under it (respecting
+  `--recursive`).
+- anything else — treated as a glob pattern (`*`, `?`, `[...]`, and `**`
+  for recursive matching); quote it if you don't want your shell to
+  expand it before the program sees it. A directory matched by a glob is
+  itself expanded the same way a plain directory argument would be.
+
+Multiple `PATHS` can be given and mixed freely (e.g. `a.txt ./dir
+'*.pdf'`); results are deduplicated by resolved absolute path. A `PATH`
+that doesn't exist and isn't a glob with any match is an error (exit 1)
+— nothing is hashed if any one of the given paths can't be resolved
+(including a single empty string, which is explicitly rejected rather
+than silently treated as the current directory — see
+`DEVELOPMENT_NOTES.md`).
 
 - `--algo` (default `sha256`) — any `hashlib`-supported algorithm name.
-- `--recursive/--no-recursive` (default recursive) — walk subdirectories
-  or not.
+- `--recursive/--no-recursive` (default recursive) — for any `PATH`
+  that's (or matches) a directory, walk its subdirectories or not.
 - `--output PATH` — write JSON to a file instead of stdout.
 
-**Caveat:** the `full_path` in the output is each file's *resolved*
-absolute path (symlinks followed), not necessarily the path you typed on
-the command line — see `ARCHITECTURE.md`'s salting section. This is also
-what gets salted into the digest, so re-running from a different
-directory with a relative `DIRECTORY` argument does **not** change the
-digest (the resolved path is the same); only actually moving the file
-does.
+**Caveats:**
+- the `full_path` in the output is each file's *resolved* absolute path
+  (symlinks followed), not necessarily the path you typed on the
+  command line — see `ARCHITECTURE.md`'s salting section. This is also
+  what gets salted into the digest, so re-running from a different
+  working directory with the same relative path arguments does **not**
+  change the digest (the resolved path is the same); only actually
+  moving the file does.
+- a directory `PATH` picks up dotfiles; a glob `PATH` does not (standard
+  shell/glob convention) — `hash somedir` and `hash 'somedir/*'` can
+  return different file sets.
+- an existing-but-empty directory `PATH` is not an error for `hash` —
+  it succeeds and prints `[]` (contrast with `submit`, below).
+- a symlinked *subdirectory* found while walking a directory is not
+  followed (a symlink given directly as a `PATH` is).
 
-## `solana-poe submit DIRECTORY --keypair PATH [options]`
+## `solana-poe submit PATHS... --keypair PATH [options]`
 
 Hashes every file, builds Memo transaction(s) (batched by default, or
 one per file with `--individual`), signs and sends each with the given
@@ -63,12 +89,14 @@ keypair, and writes a JSON manifest.
   keypair balance. Useful for previewing batching.
 
 **Caveats:**
-- `submit` currently has no confirmed live devnet run — the public
-  devnet airdrop faucet was unreachable from the development sandbox on
-  every attempt (see `DEVELOPMENT_NOTES.md`). The transaction-building
-  and signing path has only been exercised via `--dry-run` and an
-  offline wire-format round-trip test, not against a real, funded
-  submission.
+- `submit` has been verified against a real, funded devnet transaction
+  exactly once (8 files, combined mode) — see `ClaudeAssumptions.txt`'s
+  "RESOLVED: FIRST LIVE DEVNET SUBMIT" section. `--individual` mode and
+  mainnet have not been exercised against a live network.
+- An existing-but-empty `PATH` (e.g. an empty directory) makes `submit`
+  refuse to send anything (`no files found`, exit 1) — unlike `hash`,
+  which succeeds with `[]` for the same input. Intentional: submitting
+  nothing isn't a useful action worth a network round trip.
 - Every hash is checked against `MAX_MEMO_BYTES` *before* any batching
   or network activity, so an oversized hash (in practice, only reachable
   via an excessively long `--memo-prefix`, since real hash algorithms'

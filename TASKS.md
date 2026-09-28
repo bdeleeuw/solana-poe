@@ -6,15 +6,13 @@ added, completed, or reprioritized.
 
 ## Open
 
-1. [ ] **Commit and push the compute-budget fix.** `client.py`'s
-   `build_memo_instructions` now prepends a `ComputeBudget::
-   SetComputeUnitLimit` instruction to every memo transaction (see
-   `DEVELOPMENT_NOTES.md`) — a real bug found via the first live devnet
-   submit, not yet committed. Recommend committing before doing anything
-   else with this repo, since the previous behavior could fail on-chain
-   for any realistically-sized combined memo.
+(none)
 
 ## Done
+
+- [x] **Commit and push the compute-budget fix.** Committed as `092140e`
+  ("Default submit to combined batching; fix compute-budget exhaustion
+  bug") and pushed to `origin/main` over the session SSH key.
 
 - [x] **Push the local commit(s) to GitHub.** Resolved via a session-generated
   SSH keypair (`~/.ssh/id_ed25519_solana_poe`) that the user added to their

@@ -94,6 +94,61 @@ knowledge.
 
 ## Manifest / path design
 
+- **`click.Path`'s type conversion silently normalizes an empty-string
+  CLI argument to `Path('.')` (the current directory), independent of
+  and prior to any application-level validation.** Found via adversarial
+  QA on the `hash`/`submit` `PATHS...` rework: `Path("").is_dir()` is
+  `True` (Python normalizes `""` to `.`), so `resolve_targets()` needed
+  an explicit `if not spec_str: raise ValueError(...)` guard against
+  empty specs -- otherwise an unset shell variable interpolated into the
+  command line (`solana-poe submit "$MAYBE_EMPTY"`) would silently
+  resolve to "every file under the current directory" (verified live:
+  hashed 3800+ files including `.git` internals, no warning) rather than
+  erroring. That guard alone wasn't enough, though: the CLI originally
+  declared `PATHS...` with `type=click.Path(path_type=Path)`, and
+  click's own conversion turns `""` into `Path('.')` *before*
+  `resolve_targets` ever runs -- so the library-level fix was correctly
+  in place but never reached by an actual CLI invocation with an empty
+  argument. Fixed by dropping the `click.Path` type entirely for this
+  argument (`paths` now arrives as raw, unconverted strings; the
+  `Path(...)` conversion happens inside `resolve_targets`/`hash_file`
+  instead, where the empty-string check can actually see it). Lesson:
+  a fix verified only via a direct library-level unit test
+  (`resolve_targets([""])`) can still be dead on arrival through the
+  actual CLI if a framework's own argument-type conversion runs first
+  and silently launders the exact input the fix was checking for --
+  test the real entry point, not just the function underneath it.
+
+- **A directory walk and a glob pattern over the same directory don't
+  return the same files, and this is easy to not notice.** `iter_files()`
+  (used for directory-mode walking) picks up dotfiles; `glob.glob()`
+  (used for glob-mode) doesn't match them with a bare `*`, per standard
+  shell/glob convention. Verified: a dir with `.hidden.txt` + `a.txt`
+  gives `{".hidden.txt", "a.txt"}` via directory mode but only `{"a.txt"}`
+  via `*` glob mode. Left as-is (changing glob semantics to include
+  dotfiles would surprise anyone used to normal shell globbing) but
+  documented in README.md/ARCHITECTURE.md rather than left implicit.
+
+- **Pointing a directory `PATH` at a directory containing files you
+  didn't mean to include hashes (and, via `submit`, tries to post) all
+  of them, with no exclusion list.** Verified: `solana-poe hash .` from
+  this project's own repo root hashed 3817 files, including
+  `devnet-keypair.json`'s full path (not its contents — SHA256 is
+  one-way, so this isn't a key leak, just noise/unwanted fee spend if
+  run through `submit`). No code fix applied; this is inherent to "hash
+  everything under a directory" and any generic tool with that feature
+  has the same property. Documented as a caveat in README.md.
+
+- **A symlinked *subdirectory* encountered while walking a directory is
+  silently skipped.** `Path.glob("**/*")` (what `iter_files` uses) does
+  not traverse into a symlink-to-a-directory nested inside the directory
+  being walked, on the Python version this project has been tested
+  with. Verified: `top/linked_sub -> ../real_target/` with a file inside
+  `real_target` — walking `top` returns nothing. A symlink passed
+  directly *as* a `PATH` (to a file or a directory) is followed
+  correctly; only this nested case is missed. Not fixed (would need
+  cycle detection to do safely); documented as a known limitation.
+
 - **`Path.resolve()` follows symlinks**, unlike `os.path.abspath()`.
   Hashing a file reached through a symlink records the symlink's
   *target* path as the salt, not the symlink's own path. Relevant if a

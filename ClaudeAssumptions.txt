@@ -128,9 +128,11 @@ against user intent — flagged here for the user to confirm or override)
     since the user's request just said "using Memo" without specifying
     a version.
 
-19. `hash_directory` defaults to recursive=True (walks subdirectories)
-    and returns results sorted alphabetically by relative path for
-    deterministic output. Neither was specified by the user.
+19. `hash_directory` (renamed `hash_paths` 2026-09-15, see the new
+    section near the end of this file) defaults to recursive=True (walks
+    subdirectories) and returns results sorted alphabetically by
+    relative path for deterministic output. Neither was specified by
+    the user.
 
 20. No built-in retry/backoff for RPC rate-limiting (HTTP 429) is
     implemented in the library itself. During manual testing against
@@ -371,3 +373,119 @@ KNOWN UNTESTED PATH
     against a live RPC endpoint had only been verified by reading the
     installed library's source, not by executing it -- until the user
     funded the wallet and asked for a live test (see above).
+
+================================================================
+PATH ARGUMENT GENERALIZED TO FILE/GLOB/DIRECTORY (2026-09-15)
+================================================================
+The user said: "change the cli parameters so, if the specified path is a
+file, then just poe just that one file. If the path is a wildcard
+filespec, then poe all files matching the wildcard filespec. If the
+path is a directory, poe all files in that directory." A direct
+instruction, implemented as described. Sub-decisions made while
+implementing it, NOT specified by the user:
+
+32. The `hash`/`submit` argument was changed from a single required
+    `DIRECTORY` (`nargs=1`, must be an existing directory) to a variadic
+    `PATHS...` (`nargs=-1, required=True`, no `exists=True` check at the
+    click level, since a literal glob-pattern string like "*.txt" does
+    not itself "exist" as a path). This was necessary to support (a)
+    shells that expand an unquoted glob into multiple arguments before
+    the program ever sees it, and (b) mixing several files/dirs/globs in
+    one invocation. The user's wording ("if the specified path is...")
+    reads singular, but a variadic argument is a strict superset of
+    that (a single PATH is still valid) and is standard practice for
+    tools that accept files/globs (cp, tar, grep, etc.) -- inferred, not
+    confirmed with the user.
+
+33. `hashing.hash_directory()` was renamed to `hash_paths()` and its
+    single-directory-only body replaced by a new shared
+    `resolve_targets()` function (file / directory / glob resolution),
+    rather than keeping `hash_directory` around as a thin
+    backwards-compatible wrapper. Consistent with this project's
+    established pattern of clean replacement over deprecated aliases
+    (see the "BATCHING FLIPPED TO DEFAULT-ON" section's reasoning for
+    replacing `--combine` with `--individual` outright) -- there are
+    still no real users of the library API to break.
+
+34. Ambiguous-case resolution order: a spec is checked against the
+    literal filesystem first (existing file, then existing directory)
+    and ONLY treated as a glob pattern if neither matches. This means a
+    file literally named e.g. "a*b.txt" would be used directly rather
+    than glob-expanded, and a spec that both contains glob metacharacters
+    AND matches nothing is reported as "does not exist and matches no
+    files" (one error message covers both "typo'd a real path" and
+    "glob pattern with zero matches"). Not specified by the user.
+
+35. Multiple specs are deduplicated by resolved absolute path (so
+    `solana-poe hash a.txt a.txt` or overlapping directory/glob specs
+    that both reach the same file only hash it once) and unioned in the
+    order the specs were given (each spec's own matches in sorted
+    order, but specs themselves are not globally re-sorted against each
+    other). Not requested; added as a reasonable safeguard against
+    accidental double-counting once multiple specs became possible.
+
+36. `glob.glob(..., recursive=True)` is always used (enabling `**`
+    matching whenever a pattern contains it), independent of the
+    `--recursive/--no-recursive` CLI flag. That flag was interpreted as
+    controlling directory-*walking* behavior only (for a literal
+    directory argument, or a directory matched by a glob) -- not as a
+    switch for how a glob pattern's own `**` syntax behaves, since the
+    user explicitly writing `**` in a pattern is itself an unambiguous
+    choice to recurse. Not specified by the user.
+
+================================================================
+ADVERSARIAL QA ROUND 2 -- FOUND AND FIXED A REAL BUG (2026-09-15)
+================================================================
+The user asked for another independent adversarial QA agent (same
+pattern as the first round) after the file/glob/directory rework above,
+still uncommitted at the time. Unlike round 1, this one found a genuine
+bug rather than only doc/polish gaps, and it survived an earlier "fix":
+
+37. CONFIRMED BUG, FIXED: an empty-string spec (e.g.
+    `solana-poe submit "$MAYBE_EMPTY"` where the variable is unset)
+    silently resolved to "every file under the current directory"
+    instead of erroring, because `Path("").is_dir()` is `True`. Live
+    repro before the fix: `solana-poe hash ''` from this repo's root
+    hashed 3817 files, `.git` internals included. First fix attempt
+    (a `resolve_targets` guard checking the raw string) verified correct
+    via a direct library-level unit test, but did NOT fix the actual
+    CLI: `click.Path`'s own type-conversion step turns `""` into
+    `Path('.')` before `resolve_targets` ever runs, silently laundering
+    the exact input the guard was checking for. Real fix: dropped the
+    `click.Path` type from the `PATHS...` argument entirely, so `paths`
+    arrives as raw strings and the empty-string guard actually sees
+    them. See `DEVELOPMENT_NOTES.md` for the full account -- this is
+    exactly the kind of pitfall that doc is for. Regression tests added
+    at both levels (`test_resolve_targets.py`'s library-level test,
+    which would NOT have caught this on its own, and a new
+    `test_cli.py` test that invokes the actual CLI with `""`).
+
+38. Three further findings were DOCUMENTED rather than changed in code,
+    since each is either standard/expected behavior once named, or a
+    genuine but low-value-to-fix limitation:
+    - a directory walk includes dotfiles; a glob pattern does not
+      (standard shell/glob convention -- changing glob semantics to
+      include dotfiles would surprise anyone used to normal globbing).
+    - hashing a directory that happens to contain
+      `devnet-keypair.json` (or `.git`, etc.) sweeps it into the
+      results -- not a key leak (only the path and a one-way hash are
+      recorded), but an undocumented footgun for anyone running
+      `submit` against a directory without checking what's in it first.
+      No exclusion list was added; this is inherent to "hash everything
+      under a directory" and adding one wasn't requested.
+    - a symlinked *subdirectory* found while walking a directory is not
+      followed (pre-existing `Path.glob("**/*")` behavior, not
+      introduced by this rework). Not fixed -- doing so safely would
+      need cycle detection, more scope than this warranted.
+    Also reconsidered and left AS-IS (documented as intentional rather
+    than changed): `hash` succeeds with `[]` on an existing-but-empty
+    directory while `submit` errors with "no files found" for the same
+    input. This exact asymmetry was independently flagged by BOTH QA
+    rounds now; kept because an empty result is valid information for a
+    read-only command but a pointless network round trip for one that
+    spends fees.
+
+Also caught and fixed while addressing the above: `RUNNABLE_SCRIPTS.md`
+still claimed "submit currently has no confirmed live devnet run,"
+which was true when written but stale after the live verification
+earlier the same day -- corrected in passing.

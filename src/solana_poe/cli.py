@@ -8,7 +8,7 @@ from typing import Dict, Optional
 import click
 
 from .client import CLUSTER_URLS, SolanaPoEClient, load_keypair, resolve_rpc_url
-from .hashing import DEFAULT_ALGORITHM, hash_directory, hash_file
+from .hashing import DEFAULT_ALGORITHM, hash_file, hash_paths
 from .manifest import ManifestEntry, read_manifest, write_manifest
 from .memo import MAX_MEMO_BYTES, MEMO_PROGRAM_ID_V1, MEMO_PROGRAM_ID_V2
 
@@ -27,15 +27,20 @@ def main() -> None:
 
 
 @main.command("hash")
-@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("paths", nargs=-1, required=True)
 @click.option("--algo", default=DEFAULT_ALGORITHM, show_default=True, help="Hash algorithm (any hashlib name).")
 @click.option("--recursive/--no-recursive", default=True, show_default=True)
 @click.option("--output", type=click.Path(path_type=Path), help="Write results as JSON to this file instead of stdout.")
-def hash_cmd(directory: Path, algo: str, recursive: bool, output: Optional[Path]) -> None:
-    """Hash every file in DIRECTORY. No blockchain interaction."""
+def hash_cmd(paths: tuple, algo: str, recursive: bool, output: Optional[Path]) -> None:
+    """Hash every file resolved from PATHS. No blockchain interaction.
+
+    Each PATH may be a single file, a directory (every file under it is
+    hashed), or a glob pattern like '*.txt' or 'data/**/*.pdf' (quote it
+    if you don't want your shell to expand it first).
+    """
     try:
-        results = hash_directory(directory, algorithm=algo, recursive=recursive)
-    except ValueError as exc:
+        results = hash_paths(paths, algorithm=algo, recursive=recursive)
+    except (ValueError, FileNotFoundError) as exc:
         click.echo(f"error: {exc}", err=True)
         sys.exit(1)
     payload = [
@@ -51,7 +56,7 @@ def hash_cmd(directory: Path, algo: str, recursive: bool, output: Optional[Path]
 
 
 @main.command("submit")
-@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("paths", nargs=-1, required=True)
 @click.option(
     "--keypair",
     required=True,
@@ -81,7 +86,7 @@ def hash_cmd(directory: Path, algo: str, recursive: bool, output: Optional[Path]
 )
 @click.option("--dry-run", is_flag=True, help="Hash files and print the memos that would be sent, without submitting anything.")
 def submit_cmd(
-    directory: Path,
+    paths: tuple,
     keypair: Path,
     cluster: Optional[str],
     rpc_url: Optional[str],
@@ -93,10 +98,16 @@ def submit_cmd(
     manifest_path: Path,
     dry_run: bool,
 ) -> None:
-    """Hash every file in DIRECTORY and post each hash to Solana as a Memo transaction."""
+    """Hash every file resolved from PATHS and post each hash to Solana as
+    a Memo transaction.
+
+    Each PATH may be a single file, a directory (every file under it is
+    hashed), or a glob pattern like '*.txt' or 'data/**/*.pdf' (quote it
+    if you don't want your shell to expand it first).
+    """
     try:
-        results = hash_directory(directory, algorithm=algo, recursive=recursive)
-    except ValueError as exc:
+        results = hash_paths(paths, algorithm=algo, recursive=recursive)
+    except (ValueError, FileNotFoundError) as exc:
         click.echo(f"error: {exc}", err=True)
         sys.exit(1)
     if not results:

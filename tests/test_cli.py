@@ -32,6 +32,39 @@ def test_hash_rejects_bogus_algorithm(tmp_path: Path) -> None:
     assert "unsupported hash type" in result.output
 
 
+def test_hash_rejects_empty_string_path_instead_of_using_cwd(monkeypatch, tmp_path: Path) -> None:
+    # Regression test for a real bug found by adversarial QA: an empty
+    # string spec (e.g. from an unset shell variable interpolated into
+    # the command line) must not silently fall back to "every file under
+    # the current directory."
+    (tmp_path / "a.txt").write_text("hi")
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(main, ["hash", ""])
+    _assert_clean_failure(result)
+    assert "empty path specification" in result.output
+
+
+def test_hash_on_an_empty_directory_succeeds_with_no_results(tmp_path: Path) -> None:
+    # Documented, intentional asymmetry with `submit` (see the next test):
+    # `hash` is purely observational, so "nothing here" is valid output,
+    # not an error.
+    result = CliRunner().invoke(main, ["hash", str(tmp_path)])
+    assert result.exit_code == 0
+    assert result.output.strip() == "[]"
+
+
+def test_submit_on_an_empty_directory_errors_instead_of_submitting_nothing(
+    tmp_path: Path, tmp_path_factory
+) -> None:
+    keypair = tmp_path_factory.mktemp("kp") / "id.json"
+    keypair.write_text("[]")
+    result = CliRunner().invoke(
+        main, ["submit", str(tmp_path), "--keypair", str(keypair), "--dry-run"]
+    )
+    _assert_clean_failure(result)
+    assert "no files found" in result.output
+
+
 def test_submit_rejects_bogus_algorithm(tmp_path: Path, tmp_path_factory) -> None:
     (tmp_path / "a.txt").write_text("hi")
     keypair = tmp_path_factory.mktemp("kp") / "id.json"

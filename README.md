@@ -1,9 +1,10 @@
 # solana-poe
 
-Hash every file in a directory and anchor those hashes on Solana as a
-timestamped proof-of-existence, using the SPL Memo program. No custom
-on-chain program is required — each memo transaction is itself the proof,
-and Solana's block time gives you a trustless timestamp.
+Hash a file, a directory, or a set of files matching a glob pattern, and
+anchor those hashes on Solana as a timestamped proof-of-existence, using
+the SPL Memo program. No custom on-chain program is required — each memo
+transaction is itself the proof, and Solana's block time gives you a
+trustless timestamp.
 
 ## Install
 
@@ -15,7 +16,38 @@ pip install -e .
 
 ## Usage
 
-Hash a directory locally (no blockchain interaction):
+Every command takes one or more `PATHS`, each of which can be a single
+file, a directory (every file under it is hashed), or a glob pattern —
+quote a glob if you don't want your shell to expand it first:
+
+```bash
+solana-poe hash ./my-files/report.pdf        # a single file
+solana-poe hash ./my-files                   # every file under a directory
+solana-poe hash './my-files/*.pdf'           # a glob pattern
+solana-poe hash a.txt b.txt './logs/**/*.log'  # mix and match, as many as you like
+```
+
+A few things worth knowing about `PATHS`:
+
+- **A directory picks up dotfiles; a glob does not.** `solana-poe hash
+  ./my-files` walks every file, hidden ones included. `solana-poe hash
+  './my-files/*'` follows standard shell/glob convention and silently
+  skips anything starting with `.`. If you want hidden files via a
+  glob, match them explicitly (e.g. add `'./my-files/.*'` too).
+- **Pointing a directory PATH at somewhere containing files you didn't
+  mean to include (e.g. a `.git` directory, or a keypair file sitting
+  next to your data) will hash — and `submit` will happily try to post
+  — all of them.** There's no built-in exclusion list; know what's
+  under the directory you're pointing at, especially before running
+  `submit` (which spends real fees per file/batch).
+- **An empty string is rejected**, not silently treated as "current
+  directory" — this matters if a `PATH` comes from an environment
+  variable or script argument that might be unset.
+- A symlinked *subdirectory* encountered while walking a directory is
+  not followed (a symlink passed directly as its own `PATH`, to a file
+  or a directory, works fine).
+
+Hash locally with no blockchain interaction:
 
 ```bash
 solana-poe hash ./my-files
@@ -125,9 +157,10 @@ The CLI is a thin wrapper over `solana_poe`:
 
 ```python
 from pathlib import Path
-from solana_poe import hash_directory, load_keypair, SolanaPoEClient
+from solana_poe import hash_paths, load_keypair, SolanaPoEClient
 
-results = hash_directory(Path("./my-files"))
+# Each item can be a file, a directory, or a glob pattern string.
+results = hash_paths([Path("./my-files"), "./more-files/*.pdf"])
 client = SolanaPoEClient(
     rpc_url="https://api.devnet.solana.com",
     keypair=load_keypair(Path("~/.config/solana/id.json")),
@@ -154,3 +187,9 @@ for r in results:
   partially submitting.
 - `--cluster` defaults to `devnet`. Use `--cluster mainnet-beta` (real SOL)
   or `--rpc-url` for a custom/private endpoint.
+- If `PATHS` resolves to zero files (e.g. an existing-but-empty
+  directory), `hash` still succeeds and prints `[]` — nothing to
+  report isn't an error for a read-only command. `submit` refuses
+  instead (`no files found`, exit 1), since sending nothing isn't a
+  useful action worth a network round trip. This asymmetry is
+  intentional, not an oversight.

@@ -8,7 +8,7 @@ from .client import (
     load_keypair,
     resolve_rpc_url,
 )
-from .hashing import DEFAULT_ALGORITHM, FileHash, hash_directory, hash_file
+from .hashing import DEFAULT_ALGORITHM, FileHash, hash_file, hash_paths, resolve_targets
 from .manifest import ManifestEntry, read_manifest, write_manifest
 from .memo import MAX_MEMO_BYTES, MEMO_PROGRAM_ID_V1, MEMO_PROGRAM_ID_V2, build_memo_instruction
 
@@ -23,8 +23,9 @@ __all__ = [
     "resolve_rpc_url",
     "DEFAULT_ALGORITHM",
     "FileHash",
-    "hash_directory",
     "hash_file",
+    "hash_paths",
+    "resolve_targets",
     "ManifestEntry",
     "read_manifest",
     "write_manifest",

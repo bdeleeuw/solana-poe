@@ -2,12 +2,13 @@
 
 ## Purpose
 
-`solana-poe` hashes every file in a directory and anchors those hashes on
-the Solana blockchain as a timestamped proof-of-existence, using the SPL
-Memo program. No custom on-chain program is deployed — each Memo
-transaction *is* the proof, and the transaction's block time is the
-trustless timestamp. A JSON manifest ties local files to the transaction
-signatures that anchored them, so a claim can be checked later.
+`solana-poe` hashes files -- given as individual files, directories, or
+glob patterns -- and anchors those hashes on the Solana blockchain as a
+timestamped proof-of-existence, using the SPL Memo program. No custom
+on-chain program is deployed — each Memo transaction *is* the proof, and
+the transaction's block time is the trustless timestamp. A JSON manifest
+ties local files to the transaction signatures that anchored them, so a
+claim can be checked later.
 
 ## Scope
 
@@ -22,8 +23,40 @@ signatures that anchored them, so a claim can be checked later.
 
 ## High-level design decisions
 
+**A `PATHS...` argument accepts files, directories, and glob patterns,
+resolved uniformly.** `hashing.resolve_targets()` takes each given spec
+and: uses it directly if it's an existing file; walks it if it's an
+existing directory (respecting `--recursive`); otherwise treats it as a
+glob pattern (via `glob.glob(..., recursive=True)`, so `**` works) and
+recurses into any directory it matches. Multiple specs are deduplicated
+by resolved absolute path and unioned in the order given. A spec that's
+neither an existing path nor a glob with any match raises
+`FileNotFoundError`. An empty string spec raises `ValueError` rather
+than being resolved -- `Path("").is_dir()` is `True` (it normalizes to
+`.`), so without this explicit check an empty string (e.g. from an
+unset shell variable) would silently expand to "every file under the
+current directory" instead of erroring. Found live: `solana-poe hash
+''` hashed 3800+ files including `.git` internals with no warning
+before this check was added. Because of this, the CLI's `PATHS`
+argument is declared with no `click.Path` type conversion — `click.Path`
+itself normalizes an empty string to `Path('.')` during argument
+parsing, which would silently defeat this check before `resolve_targets`
+ever saw the original empty string; `paths` arrives as raw strings and
+`resolve_targets`/`hash_file` do their own `Path(...)` conversion
+instead. This one function is shared by `hash`, `submit`, and the
+library's `hash_paths()` -- there's no separate "give me exactly one
+directory" code path anymore.
+
+Known asymmetries/limitations of path resolution, all deliberate rather
+than fixed (see `DEVELOPMENT_NOTES.md` for the full account): a
+directory walk picks up dotfiles, but a glob pattern doesn't (standard
+shell/glob convention); a symlinked *subdirectory* encountered while
+walking a directory is not followed (a symlink passed directly as its
+own spec is); and `hash` succeeds with an empty result on a directory
+with no files, while `submit` refuses to send nothing.
+
 **Hashing is salted with the file's full absolute path.**
-`hash_directory()` resolves each file to its canonical absolute path
+`hash_paths()` resolves each file to its canonical absolute path
 (`Path.resolve()`) and folds that string into the digest:
 `sha256(full_path_utf8 + b"\x00" + file_bytes)`. Two files with identical
 bytes at different locations get different digests; moving a file changes
@@ -92,7 +125,7 @@ accidentally spend real SOL; mainnet requires an explicit
 
 ## Module map
 
-- `hashing.py` — file/directory hashing, salting.
+- `hashing.py` — path resolution (file/directory/glob), hashing, salting.
 - `memo.py` — builds the Memo-program instruction; holds the v1/v2
   program ids and the memo size ceiling.
 - `client.py` — `SolanaPoEClient` (send/fetch memos), cluster URL
