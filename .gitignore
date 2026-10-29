@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 solana-poe-manifest.json
 devnet-keypair.json
+ClaudeAssumptions.txt
+DEVELOPMENT_NOTES.md
+TASKS.md
