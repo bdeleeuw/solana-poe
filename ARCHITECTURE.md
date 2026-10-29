@@ -133,13 +133,3 @@ accidentally spend real SOL; mainnet requires an explicit
 - `manifest.py` — `ManifestEntry` dataclass, JSON read/write.
 - `cli.py` — the `hash`/`submit`/`verify` commands; the only place that
   ties hashing, the client, and the manifest together.
-
-## Non-goals / known limitations
-
-See `ClaudeAssumptions.txt` for the full list of design assumptions (most
-are still standing and unconfirmed by the user) and
-`DEVELOPMENT_NOTES.md` for concrete technical pitfalls hit while building
-this. Headline limitations: no live devnet `submit` has ever been
-executed end-to-end (public faucet was unreachable from the dev sandbox);
-`verify` cannot check a relocated copy of a directory tree; no retry/
-backoff around RPC rate limiting.
